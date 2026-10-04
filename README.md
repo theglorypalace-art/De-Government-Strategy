@@ -1,38 +1,33 @@
-# Migration Dip Trader
+# De-Government Strategy
 
-Solana meme strategy bot based on:
+Post-migration **dip entry** + **whale confluence** trader for Solana memes.
 
-1. **After migration** — wait for a **15–20% dip** from the post-migration high, then enter  
-2. **Take profit ~50%** — full exit  
-3. **Stop loss ~25%** (configurable; wider optional)  
-4. **Whale confluence** — only enter when **≥2** tracked whale wallets bought the same mint recently  
+Repo: https://github.com/theglorypalace-art/De-Government-Strategy
 
-Built with lessons from a prior launch sniper: DRY_RUN default, Telegram controls, Helius RPC, rate-limit-aware polling, PumpPortal/Jupiter-style exits.
+## Strategy
+
+1. Track active whale wallets (`WHALE_WALLETS`)
+2. When **≥2** buy the same mint → add to watchlist
+3. Enter after price dips **~15–20%** from peak (default 18%)
+4. Exit **TP +50%** / **SL −25%** / max hold
 
 ## Quick start
 
 ```bash
 cp .env.example .env
-# fill HELIUS_API_KEY, TELEGRAM_*, WHALE_WALLETS
+# HELIUS_API_KEY, TELEGRAM_*, WHALE_WALLETS=addr1,addr2,...
 npm install
 npm start
 ```
 
-Set `DRY_RUN=false` and `WALLET_PRIVATE_KEY` only when ready for real size.
-
-## Strategy flow
-
-```
-Token migrates / appears on DEX
-  → track peak price since migration
-  → price dips DIP_ENTRY_PCT from peak
-  → ≥ MIN_WHALE_AGREEMENT whales bought same mint in lookback window
-  → buy CAPITAL_PCT of wallet (capped)
-  → sell on TP / SL / max hold
-```
+`DRY_RUN=true` until ready. Then `DRY_RUN=false` + `WALLET_PRIVATE_KEY`.
 
 ## Telegram
 
-`/menu` · `/status` · `/whales` · `/positions` · `/setdip` · `/settp` · `/setsl` · `/start` · `/stop`
+`/menu` · `/whales` · `/watch <CA>` · `/setdip 18` · `/settp 50` · `/setsl 25` · `/setwhales 2` · `/starttrading` · `/stoptrading`
 
 See `docs/USER_GUIDE.md`.
+
+## Deploy (Railway)
+
+Connect this repo, set env vars from `.env.example`, start command: `node index.js`.
