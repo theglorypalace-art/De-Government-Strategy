@@ -21,7 +21,6 @@ liveConfig.start();
 telegram.start();
 
 // Quiet mode: only notify on actual ENTRY or EXIT.
-// Whale confluence just adds to watchlist + tries entry silently.
 whales.start(async (hit) => {
   console.log(`[signal] whale confluence ${hit.count} on ${hit.mint.slice(0, 8)}…`);
   watchlist.watch(hit.mint, { source: 'whales' });
