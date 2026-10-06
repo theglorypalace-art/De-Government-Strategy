@@ -8,34 +8,43 @@ const { getSolBalance, loadWallet } = require('../solana/wallet');
 
 let bot;
 let statusMsgId = null;   // the single live status message we keep editing
-let spinnerIdx = 0;
-const SPINNERS = ['⏳', '🔄', '⚡', '📡', '👀', '⏳'];
+let lastStatusKey = '';   // only update when state actually changes
 
 function allowed(chatId) {
   if (!TELEGRAM_CHAT_ID) return true;
   return String(chatId) === String(TELEGRAM_CHAT_ID);
 }
 
-/** Build the live status line that shows what the bot is doing right now */
+/** Build the live status. Returns { key, text }. Only send/edit when key changes. */
 function liveStatusLine() {
   const c = getConfig();
   const open = positions.listOpen();
   const watching = watchlist.all().filter((w) => !w.entered).length;
-  const spin = SPINNERS[spinnerIdx % SPINNERS.length];
-  spinnerIdx++;
 
   if (c.paused) {
-    return `⏸  PAUSED\nBot is stopped. Press Start to resume.`;
+    return {
+      key: 'paused',
+      text: `⏸  PAUSED\nBot is stopped. Press Start to resume.`,
+    };
   }
   if (open.length > 0) {
     const p = open[0];
     const pnl = p.lastPnl != null ? ` · PnL ${p.lastPnl >= 0 ? '+' : ''}${p.lastPnl.toFixed(1)}%` : '';
-    return `${spin}  IN TRADE\nMonitoring ${open.length} position${open.length > 1 ? 's' : ''}${pnl}\nTP +${c.takeProfitPct}% · SL −${c.stopLossPct}%`;
+    return {
+      key: `trade:${open.length}`,
+      text: `🟢  IN TRADE\nMonitoring ${open.length} position${open.length > 1 ? 's' : ''}${pnl}\nTP +${c.takeProfitPct}% · SL −${c.stopLossPct}%`,
+    };
   }
   if (watching > 0) {
-    return `${spin}  WATCHING FOR DIP\n${watching} mint${watching > 1 ? 's' : ''} on watchlist\nWaiting for −${c.dipEntryPct}% dip`;
+    return {
+      key: `watch:${watching}:${c.dipEntryPct}`,
+      text: `👀  WATCHING FOR DIP\n${watching} mint${watching > 1 ? 's' : ''} on watchlist\nWaiting for −${c.dipEntryPct}% dip`,
+    };
   }
-  return `${spin}  WAITING FOR WHALES\nTracking ${whales.listWhales().length} wallets\nNeed ≥${c.minWhaleAgreement} whales to act`;
+  return {
+    key: `wait:${whales.listWhales().length}:${c.minWhaleAgreement}`,
+    text: `⏳  WAITING FOR WHALES\nTracking ${whales.listWhales().length} wallets\nNeed ≥${c.minWhaleAgreement} whales to act`,
+  };
 }
 
 function statusText() {
@@ -83,10 +92,15 @@ function mainKeyboard() {
   };
 }
 
-/** Create or update the single live status message */
-async function refreshLiveStatus() {
+/** Create or update the single status message — only when state changes */
+async function refreshLiveStatus(force = false) {
   if (!bot || !TELEGRAM_CHAT_ID) return;
-  const text = liveStatusLine();
+  const { key, text } = liveStatusLine();
+
+  // Skip if nothing important changed
+  if (!force && key === lastStatusKey) return;
+  lastStatusKey = key;
+
   try {
     if (statusMsgId) {
       await bot.editMessageText(text, {
@@ -98,7 +112,6 @@ async function refreshLiveStatus() {
       statusMsgId = sent.message_id;
     }
   } catch (err) {
-    // message was deleted or too old → send a fresh one
     if (/message to edit not found|message is not modified|MESSAGE_ID_INVALID/i.test(err.message)) {
       try {
         const sent = await bot.sendMessage(TELEGRAM_CHAT_ID, text);
@@ -116,9 +129,9 @@ function start() {
   bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
   console.log('[telegram] polling');
 
-  // Start the live status spinner (updates every 8 seconds)
-  setTimeout(() => refreshLiveStatus(), 2000);
-  setInterval(() => refreshLiveStatus(), 8000);
+  // Check for state changes every 20 seconds (only updates message when state changes)
+  setTimeout(() => refreshLiveStatus(true), 2000);
+  setInterval(() => refreshLiveStatus(), 20000);
 
   bot.onText(/\/(start|menu|status)/i, (msg) => {
     if (!allowed(msg.chat.id)) return;
@@ -146,7 +159,7 @@ function start() {
       parse_mode: 'Markdown',
       reply_markup: mainKeyboard(),
     });
-    refreshLiveStatus();
+    refreshLiveStatus(true);
   });
 
   bot.onText(/\/whales/i, (msg) => {
@@ -165,7 +178,7 @@ function start() {
     if (!allowed(msg.chat.id)) return;
     applyLocal({ dipEntryPct: Number(m[1]), riskProfile: 'custom' });
     bot.sendMessage(msg.chat.id, `Dip entry set to −${m[1]}% (now custom)`);
-    refreshLiveStatus();
+    refreshLiveStatus(true);
   });
   bot.onText(/\/settp\s+(\d+)/i, (msg, m) => {
     if (!allowed(msg.chat.id)) return;
@@ -181,25 +194,25 @@ function start() {
     if (!allowed(msg.chat.id)) return;
     applyLocal({ minWhaleAgreement: Number(m[1]), riskProfile: 'custom' });
     bot.sendMessage(msg.chat.id, `Need ≥${m[1]} whales (now custom)`);
-    refreshLiveStatus();
+    refreshLiveStatus(true);
   });
   bot.onText(/\/watch\s+(\S+)/i, (msg, m) => {
     if (!allowed(msg.chat.id)) return;
     watchlist.watch(m[1].trim(), { source: 'telegram' });
     bot.sendMessage(msg.chat.id, `Watching ${m[1].trim().slice(0, 12)}… for dip`);
-    refreshLiveStatus();
+    refreshLiveStatus(true);
   });
   bot.onText(/\/(pause|stoptrading)/i, (msg) => {
     if (!allowed(msg.chat.id)) return;
     applyLocal({ paused: true });
     bot.sendMessage(msg.chat.id, 'Paused');
-    refreshLiveStatus();
+    refreshLiveStatus(true);
   });
   bot.onText(/\/(resume|starttrading)/i, (msg) => {
     if (!allowed(msg.chat.id)) return;
     applyLocal({ paused: false });
     bot.sendMessage(msg.chat.id, 'Running');
-    refreshLiveStatus();
+    refreshLiveStatus(true);
   });
 
   bot.on('callback_query', async (q) => {
@@ -211,7 +224,7 @@ function start() {
       applyLocal({ paused: p });
       bot.answerCallbackQuery(q.id, { text: p ? 'Paused' : 'Running' });
       bot.sendMessage(q.message.chat.id, statusText(), { reply_markup: mainKeyboard() });
-      refreshLiveStatus();
+      refreshLiveStatus(true);
       return;
     }
 
@@ -224,7 +237,7 @@ function start() {
           parse_mode: 'Markdown',
           reply_markup: mainKeyboard(),
         });
-        refreshLiveStatus();
+        refreshLiveStatus(true);
       } else {
         bot.answerCallbackQuery(q.id, { text: 'Unknown preset' });
       }
@@ -284,8 +297,7 @@ function start() {
 function notify(text) {
   if (!bot || !TELEGRAM_CHAT_ID) return;
   bot.sendMessage(TELEGRAM_CHAT_ID, text).catch(() => {});
-  // also refresh the live status after important events
-  setTimeout(() => refreshLiveStatus(), 1500);
+  setTimeout(() => refreshLiveStatus(true), 1500);
 }
 
 module.exports = { start, notify };
