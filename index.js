@@ -20,15 +20,20 @@ if (!config.HELIUS_API_KEY) {
 liveConfig.start();
 telegram.start();
 
-// When whales agree on a mint → add to dip watchlist → try enter if dip already armed
+// Quiet mode: only notify on actual ENTRY or EXIT.
+// Whale confluence just adds to watchlist + tries entry silently.
 whales.start(async (hit) => {
   console.log(`[signal] whale confluence ${hit.count} on ${hit.mint.slice(0, 8)}…`);
   watchlist.watch(hit.mint, { source: 'whales' });
-  telegram.notify(`🐋 ${hit.count} whales bought ${hit.mint.slice(0, 12)}…\nWatching for −${liveConfig.getConfig().dipEntryPct}% dip`);
   const res = await positions.tryEnter(hit.mint, `whales:${hit.count}`);
   if (res.ok) {
-    telegram.notify(`🟢 ENTERED ${hit.mint.slice(0, 12)}… (${config.DRY_RUN ? 'DRY' : 'LIVE'})`);
-  } else if (res.why && !/dip|whales \d/.test(res.why)) {
+    const cfg = liveConfig.getConfig();
+    telegram.notify(
+      `🟢 ENTERED ${hit.mint.slice(0, 12)}…\n` +
+        `${config.DRY_RUN ? 'DRY' : 'LIVE'} · ${hit.count} whales\n` +
+        `TP +${cfg.takeProfitPct}% · SL −${cfg.stopLossPct}%`
+    );
+  } else if (res.why && !/dip|whales \d|busy|paused|max concurrent/.test(res.why)) {
     console.log('[signal] skip', res.why);
   }
 });
@@ -37,10 +42,12 @@ watchlist.start(async (signal) => {
   console.log(`[dip] ${signal.mint.slice(0, 8)}… −${signal.dipPct.toFixed(1)}% from peak`);
   const res = await positions.tryEnter(signal.mint, `dip:${signal.dipPct.toFixed(0)}`);
   if (res.ok) {
+    const cfg = liveConfig.getConfig();
     telegram.notify(
-      `🟢 DIP ENTRY ${signal.mint.slice(0, 12)}… −${signal.dipPct.toFixed(1)}%\nTP +${liveConfig.getConfig().takeProfitPct}% SL −${liveConfig.getConfig().stopLossPct}%`
+      `🟢 DIP ENTRY ${signal.mint.slice(0, 12)}… −${signal.dipPct.toFixed(1)}%\n` +
+        `TP +${cfg.takeProfitPct}% · SL −${cfg.stopLossPct}%`
     );
   }
 });
 
-console.log('[boot] waiting for whale buys + dips…');
+console.log('[boot] waiting for whale buys + dips… (notifications only on ENTRY / EXIT)');
