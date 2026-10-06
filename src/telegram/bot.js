@@ -1,6 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, DRY_RUN } = require('../config');
-const { getConfig, applyLocal } = require('../live/liveConfig');
+const { getConfig, applyLocal, applyPreset, listPresets } = require('../live/liveConfig');
 const whales = require('../whales/tracker');
 const watchlist = require('../migration/watchlist');
 const positions = require('../trading/positions');
@@ -16,9 +16,16 @@ function allowed(chatId) {
 function statusText() {
   const c = getConfig();
   const open = positions.listOpen();
+  const riskLabel =
+    c.riskProfile === 'easy'
+      ? '🟢 Easy (low risk / lower profit)'
+      : c.riskProfile === 'high'
+        ? '🔴 High (high risk / higher profit)'
+        : '🟡 Medium (balanced)';
   return [
     DRY_RUN ? '🧪 DRY RUN' : '🔴 LIVE',
     c.paused ? '⏸ PAUSED' : '🟢 RUNNING',
+    `Risk: ${riskLabel}`,
     '',
     `Dip entry: −${c.dipEntryPct}% from peak`,
     `TP +${c.takeProfitPct}% · SL −${c.stopLossPct}% · hold ${c.maxHoldMin}m`,
@@ -27,6 +34,28 @@ function statusText() {
     `Tracking ${whales.listWhales().length} wallets · watchlist ${watchlist.all().length}`,
     `Open: ${open.length}`,
   ].join('\n');
+}
+
+function mainKeyboard() {
+  const c = getConfig();
+  return {
+    inline_keyboard: [
+      [{ text: c.paused ? '▶️ Start' : '⏸ Pause', callback_data: 'toggle_pause' }],
+      [
+        { text: '🟢 Easy', callback_data: 'risk_easy' },
+        { text: '🟡 Medium', callback_data: 'risk_medium' },
+        { text: '🔴 High', callback_data: 'risk_high' },
+      ],
+      [
+        { text: '🐋 Whales', callback_data: 'whales' },
+        { text: '👀 Watchlist', callback_data: 'watch' },
+      ],
+      [
+        { text: '📈 Positions', callback_data: 'pos' },
+        { text: '💼 Balance', callback_data: 'bal' },
+      ],
+    ],
+  };
 }
 
 function start() {
@@ -39,20 +68,29 @@ function start() {
 
   bot.onText(/\/(start|menu|status)/i, (msg) => {
     if (!allowed(msg.chat.id)) return;
-    bot.sendMessage(msg.chat.id, statusText(), {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: getConfig().paused ? '▶️ Start' : '⏸ Pause', callback_data: 'toggle_pause' }],
-          [
-            { text: '🐋 Whales', callback_data: 'whales' },
-            { text: '👀 Watchlist', callback_data: 'watch' },
-          ],
-          [
-            { text: '📈 Positions', callback_data: 'pos' },
-            { text: '💼 Balance', callback_data: 'bal' },
-          ],
-        ],
-      },
+    bot.sendMessage(msg.chat.id, statusText(), { reply_markup: mainKeyboard() });
+  });
+
+  bot.onText(/\/risk(?:\s+(easy|medium|high))?/i, (msg, m) => {
+    if (!allowed(msg.chat.id)) return;
+    const name = (m[1] || '').toLowerCase();
+    if (!name) {
+      const lines = listPresets().map((p) => `• *${p.name}* (\`/risk ${p.key}\`)\n  ${p.summary}`);
+      bot.sendMessage(
+        msg.chat.id,
+        `Current risk: *${getConfig().riskProfile}*\n\nChoose a preset:\n\n${lines.join('\n\n')}`,
+        { parse_mode: 'Markdown', reply_markup: mainKeyboard() }
+      );
+      return;
+    }
+    const cfg = applyPreset(name);
+    if (!cfg) {
+      bot.sendMessage(msg.chat.id, 'Unknown preset. Use: /risk easy | medium | high');
+      return;
+    }
+    bot.sendMessage(msg.chat.id, `✅ Risk set to *${cfg.riskProfile}*\n\n${statusText()}`, {
+      parse_mode: 'Markdown',
+      reply_markup: mainKeyboard(),
     });
   });
 
@@ -70,23 +108,23 @@ function start() {
 
   bot.onText(/\/setdip\s+(\d+)/i, (msg, m) => {
     if (!allowed(msg.chat.id)) return;
-    applyLocal({ dipEntryPct: Number(m[1]) });
-    bot.sendMessage(msg.chat.id, `Dip entry set to −${m[1]}%`);
+    applyLocal({ dipEntryPct: Number(m[1]), riskProfile: 'custom' });
+    bot.sendMessage(msg.chat.id, `Dip entry set to −${m[1]}% (now custom)`);
   });
   bot.onText(/\/settp\s+(\d+)/i, (msg, m) => {
     if (!allowed(msg.chat.id)) return;
-    applyLocal({ takeProfitPct: Number(m[1]) });
-    bot.sendMessage(msg.chat.id, `TP +${m[1]}%`);
+    applyLocal({ takeProfitPct: Number(m[1]), riskProfile: 'custom' });
+    bot.sendMessage(msg.chat.id, `TP +${m[1]}% (now custom)`);
   });
   bot.onText(/\/setsl\s+(\d+)/i, (msg, m) => {
     if (!allowed(msg.chat.id)) return;
-    applyLocal({ stopLossPct: Number(m[1]) });
-    bot.sendMessage(msg.chat.id, `SL −${m[1]}%`);
+    applyLocal({ stopLossPct: Number(m[1]), riskProfile: 'custom' });
+    bot.sendMessage(msg.chat.id, `SL −${m[1]}% (now custom)`);
   });
   bot.onText(/\/setwhales\s+(\d+)/i, (msg, m) => {
     if (!allowed(msg.chat.id)) return;
-    applyLocal({ minWhaleAgreement: Number(m[1]) });
-    bot.sendMessage(msg.chat.id, `Need ≥${m[1]} whales`);
+    applyLocal({ minWhaleAgreement: Number(m[1]), riskProfile: 'custom' });
+    bot.sendMessage(msg.chat.id, `Need ≥${m[1]} whales (now custom)`);
   });
   bot.onText(/\/watch\s+(\S+)/i, (msg, m) => {
     if (!allowed(msg.chat.id)) return;
@@ -107,22 +145,49 @@ function start() {
   bot.on('callback_query', async (q) => {
     if (!allowed(q.message.chat.id)) return;
     const id = q.data;
+
     if (id === 'toggle_pause') {
       const p = !getConfig().paused;
       applyLocal({ paused: p });
       bot.answerCallbackQuery(q.id, { text: p ? 'Paused' : 'Running' });
-      bot.sendMessage(q.message.chat.id, statusText());
-    } else if (id === 'whales') {
+      bot.sendMessage(q.message.chat.id, statusText(), { reply_markup: mainKeyboard() });
+      return;
+    }
+
+    if (id.startsWith('risk_')) {
+      const name = id.replace('risk_', '');
+      const cfg = applyPreset(name);
+      if (cfg) {
+        bot.answerCallbackQuery(q.id, { text: `Risk → ${cfg.riskProfile}` });
+        bot.sendMessage(q.message.chat.id, `✅ Risk set to *${cfg.riskProfile}*\n\n${statusText()}`, {
+          parse_mode: 'Markdown',
+          reply_markup: mainKeyboard(),
+        });
+      } else {
+        bot.answerCallbackQuery(q.id, { text: 'Unknown preset' });
+      }
+      return;
+    }
+
+    if (id === 'whales') {
       bot.answerCallbackQuery(q.id);
       const list = whales.listWhales();
-      bot.sendMessage(q.message.chat.id, `Whales: ${list.length}\nNeed ≥${getConfig().minWhaleAgreement}`);
+      bot.sendMessage(
+        q.message.chat.id,
+        `Whales: ${list.length}\nNeed ≥${getConfig().minWhaleAgreement}`
+      );
     } else if (id === 'watch') {
       bot.answerCallbackQuery(q.id);
       const all = watchlist.all().slice(0, 15);
       bot.sendMessage(
         q.message.chat.id,
         all.length
-          ? all.map((w) => `${w.mint.slice(0, 8)}… dip ${((w.dipPct || 0).toFixed?.(1)) || 0}% peak→now`).join('\n')
+          ? all
+              .map(
+                (w) =>
+                  `${w.mint.slice(0, 8)}… dip ${((w.dipPct || 0).toFixed?.(1)) || 0}% peak→now`
+              )
+              .join('\n')
           : 'Watchlist empty — whales will add mints when they buy'
       );
     } else if (id === 'pos') {
@@ -131,7 +196,12 @@ function start() {
       bot.sendMessage(
         q.message.chat.id,
         open.length
-          ? open.map((p) => `${p.mint.slice(0, 8)} ${p.sizeSol} SOL pnl ${p.lastPnl?.toFixed?.(1) || '?'}%`).join('\n')
+          ? open
+              .map(
+                (p) =>
+                  `${p.mint.slice(0, 8)} ${p.sizeSol} SOL pnl ${p.lastPnl?.toFixed?.(1) || '?'}%`
+              )
+              .join('\n')
           : 'No open positions'
       );
     } else if (id === 'bal') {
